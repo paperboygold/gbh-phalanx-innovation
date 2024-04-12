@@ -93,7 +93,7 @@ def is_old_link(link):
     if date_match:
         date_str = date_match.group(1)
         file_date = datetime.strptime(date_str, '%Y%m%d')
-        comparison_date = datetime.now() - timedelta(days=1)
+        comparison_date = datetime.now() - timedelta(days=30)
         return file_date < comparison_date
     return False
 

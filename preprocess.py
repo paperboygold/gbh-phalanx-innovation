@@ -70,42 +70,48 @@ def read_and_preprocess(directories):
         cleared_supply_dispatch_df[region] = pd.DataFrame({'Timestamp': timestamps_supply[region], 'Cleared Supply Dispatch': cleared_supply_dispatch[region]}).sort_values(by='Timestamp')
         trading_price_rrp_df[region] = pd.DataFrame({'Timestamp': timestamps_trading[region], 'Trading Price RRP': trading_price_rrp[region]}).sort_values(by='Timestamp')
 
+        # Calculate the average forecast spot prices for each timestamp
+        forecast_spot_prices_avg_df = forecast_spot_prices_df[region].groupby('Timestamp').mean().reset_index()
+
+        # Keep only the most recent forecast spot price data for each timestamp
+        forecast_spot_prices_latest_df = forecast_spot_prices_df[region].drop_duplicates(subset='Timestamp', keep='last')
+
+        # Update the original forecast_spot_prices_df to include both most recent and average predictions
+        forecast_spot_prices_df[region] = pd.merge(forecast_spot_prices_latest_df, forecast_spot_prices_avg_df, on='Timestamp', suffixes=('_latest', '_avg'))
+
+        # Calculate the average predispatch data for each timestamp
+        scheduled_demand_predispatch_avg_df = scheduled_demand_predispatch_df[region].groupby('Timestamp').mean().reset_index()
+
+        # Keep only the most recent predispatch data for each timestamp
+        scheduled_demand_predispatch_latest_df = scheduled_demand_predispatch_df[region].drop_duplicates(subset='Timestamp', keep='last')
+
+        # Update the original DataFrame to include both most recent and average predictions
+        scheduled_demand_predispatch_df[region] = pd.merge(scheduled_demand_predispatch_latest_df, scheduled_demand_predispatch_avg_df, on='Timestamp', suffixes=('_latest', '_avg'))
+
     return forecast_spot_prices_df, scheduled_demand_predispatch_df, cleared_supply_dispatch_df, trading_price_rrp_df
 
-def plot_data(forecast_spot_prices_df, scheduled_demand_predispatch_df, cleared_supply_dispatch_df, trading_price_rrp_df):
-    for region in ['SA1', 'NSW1', 'QLD1', 'TAS1', 'VIC1']:
-        # Convert 'Timestamp' columns to datetime for better plotting
-        forecast_spot_prices_df[region]['Timestamp'] = pd.to_datetime(forecast_spot_prices_df[region]['Timestamp'])
-        scheduled_demand_predispatch_df[region]['Timestamp'] = pd.to_datetime(scheduled_demand_predispatch_df[region]['Timestamp'])
-        cleared_supply_dispatch_df[region]['Timestamp'] = pd.to_datetime(cleared_supply_dispatch_df[region]['Timestamp'])
-        trading_price_rrp_df[region]['Timestamp'] = pd.to_datetime(trading_price_rrp_df[region]['Timestamp'])
-
-        # Apply exponential moving average
-        span = 20  # Adjust span as needed for smoothing
-        forecast_spot_prices_df[region].loc[:, 'Smoothed Forecast Spot Price'] = forecast_spot_prices_df[region]['Forecast Spot Price'].ewm(span=span).mean()
-        scheduled_demand_predispatch_df[region].loc[:, 'Smoothed Scheduled Demand Pre-dispatch'] = scheduled_demand_predispatch_df[region]['Scheduled Demand Pre-dispatch'].ewm(span=span).mean()
-        cleared_supply_dispatch_df[region].loc[:, 'Smoothed Cleared Supply Dispatch'] = cleared_supply_dispatch_df[region]['Cleared Supply Dispatch'].ewm(span=span).mean()
-        trading_price_rrp_df[region].loc[:, 'Smoothed Trading Price RRP'] = trading_price_rrp_df[region]['Trading Price RRP'].ewm(span=span).mean()
-
-        # Plotting
-        plt.figure(figsize=(14, 8))
-
-        # Plot each DataFrame with smoothed data
-        plt.plot(forecast_spot_prices_df[region]['Timestamp'], forecast_spot_prices_df[region]['Smoothed Forecast Spot Price'], label='Forecast Spot Price')
-        plt.plot(scheduled_demand_predispatch_df[region]['Timestamp'], scheduled_demand_predispatch_df[region]['Smoothed Scheduled Demand Pre-dispatch'], label='Scheduled Demand Pre-dispatch')
-        plt.plot(cleared_supply_dispatch_df[region]['Timestamp'], cleared_supply_dispatch_df[region]['Smoothed Cleared Supply Dispatch'], label='Cleared Supply Dispatch')
-        plt.plot(trading_price_rrp_df[region]['Timestamp'], trading_price_rrp_df[region]['Smoothed Trading Price RRP'], label='Trading Price RRP')
-
-        plt.title(f"Energy Market Data for {region}")
-        plt.xlabel("Timestamp")
-        plt.ylabel("Values")
-        plt.legend()
-        plt.grid(True)
-        plt.show()
+def aggregate_data_across_regions(dataframes_dict):
+    """
+    Aggregates data across all regions by calculating the mean for each timestamp.
+    
+    Parameters:
+    - dataframes_dict: Dictionary of DataFrames for all regions.
+    
+    Returns:
+    - Aggregated DataFrame.
+    """
+    all_data = pd.concat(dataframes_dict.values(), ignore_index=True)
+    all_data['Timestamp'] = pd.to_datetime(all_data['Timestamp'])
+    aggregated_data = all_data.groupby('Timestamp').mean().reset_index()
+    return aggregated_data
 
 # Example Usage
 directories = ['data/PredispatchIS_Reports', 'data/DispatchIS_Reports', 'data/TradingIS_Reports']
 forecast_spot_prices_df, scheduled_demand_predispatch_df, cleared_supply_dispatch_df, trading_price_rrp_df = read_and_preprocess(directories)
+aggregated_forecast_prices = aggregate_data_across_regions(forecast_spot_prices_df)
+aggregated_trading_prices = aggregate_data_across_regions(trading_price_rrp_df)
+aggregated_demand = aggregate_data_across_regions(scheduled_demand_predispatch_df)
+aggregated_supply = aggregate_data_across_regions(cleared_supply_dispatch_df)
 
 # Print the .head() of each DataFrame for each region
 for region in ['SA1', 'NSW1', 'QLD1', 'TAS1', 'VIC1']:
@@ -118,6 +124,3 @@ for region in ['SA1', 'NSW1', 'QLD1', 'TAS1', 'VIC1']:
     print(scheduled_demand_predispatch_df[region].head(10))
     print(f"\n{region} - Cleared Supply Dispatch DataFrame:")
     print(cleared_supply_dispatch_df[region].head(10))
-
-# Call the plotting function
-plot_data(forecast_spot_prices_df, scheduled_demand_predispatch_df, cleared_supply_dispatch_df, trading_price_rrp_df)
