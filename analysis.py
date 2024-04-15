@@ -1,140 +1,89 @@
-# analysis.py
-import matplotlib.pyplot as plt
 import pandas as pd
-from preprocess import read_and_preprocess, aggregate_data_across_regions
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.stats import ttest_ind, pearsonr
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, r2_score
 
-def smooth_data(df, column_name, window_size=5):
+def load_data(filepath):
     """
-    Applies a moving average to smooth out the given column in the DataFrame.
-    
-    Parameters:
-    - df: pandas DataFrame containing the data.
-    - column_name: the name of the column to smooth.
-    - window_size: the number of periods to consider for the moving average.
-    
-    Returns:
-    - A new DataFrame with the smoothed column.
+    Load the combined data from a CSV file.
     """
-    df_smoothed = df.copy()
-    df_smoothed[column_name] = df[column_name].rolling(window=window_size, min_periods=1, center=True).mean()
-    return df_smoothed
+    return pd.read_csv(filepath, parse_dates=['SETTLEMENTDATE'])
 
-def plot_prices(forecast_spot_prices_df, trading_price_rrp_df, window_size=5):
+def clean_data(df):
     """
-    Plots the forecast spot prices and trading prices for different regions with smoothing applied.
-    
-    Parameters:
-    - forecast_spot_prices_df: DataFrame containing forecast spot prices.
-    - trading_price_rrp_df: DataFrame containing trading prices.
-    - window_size: the number of periods used for smoothing.
+    Perform initial data cleaning steps:
+    - Check for missing values and handle them (e.g., imputation or removal).
+    - Verify data types are correct (especially datetime and numeric types).
     """
-    for region in ['SA1', 'NSW1', 'QLD1', 'TAS1', 'VIC1']:
-        forecast_spot_prices_df[region]['Timestamp'] = pd.to_datetime(forecast_spot_prices_df[region]['Timestamp'])
-        trading_price_rrp_df[region]['Timestamp'] = pd.to_datetime(trading_price_rrp_df[region]['Timestamp'])
+    # Example: Impute missing values with the mean of the column
+    df.fillna(df.mean(), inplace=True)
+    return df
 
-        plt.figure(figsize=(14, 8))
-
-        # Apply smoothing directly before plotting
-        smoothed_forecast = smooth_data(forecast_spot_prices_df[region], 'Forecast Spot Price_latest', window_size)
-        smoothed_trading = smooth_data(trading_price_rrp_df[region], 'Trading Price RRP', window_size)
-
-        plt.plot(smoothed_forecast['Timestamp'], smoothed_forecast['Forecast Spot Price_latest'], label='Forecast Spot Price (Latest, Smoothed)')
-        plt.plot(smoothed_trading['Timestamp'], smoothed_trading['Trading Price RRP'], label='Trading Price RRP (Smoothed)')
-
-        plt.title(f"Forecast Spot Prices and Trading Prices for {region} (Smoothed)")
-        plt.xlabel("Timestamp")
-        plt.ylabel("Price")
-        plt.legend()
-        plt.grid(True)
-        plt.show()
-
-def plot_demand_supply(scheduled_demand_predispatch_df, cleared_supply_dispatch_df, window_size=5):
+def exploratory_data_analysis(df):
     """
-    Plots the demand and supply data for different regions with smoothing applied.
-    
-    Parameters:
-    - scheduled_demand_predispatch_df: DataFrame containing scheduled demand data.
-    - cleared_supply_dispatch_df: DataFrame containing cleared supply data.
-    - window_size: the number of periods used for smoothing.
+    Conduct exploratory data analysis:
+    - Summary statistics
+    - Distribution of key variables
+    - Correlation analysis
     """
-    for region in ['SA1', 'NSW1', 'QLD1', 'TAS1', 'VIC1']:
-        scheduled_demand_predispatch_df[region]['Timestamp'] = pd.to_datetime(scheduled_demand_predispatch_df[region]['Timestamp'])
-        cleared_supply_dispatch_df[region]['Timestamp'] = pd.to_datetime(cleared_supply_dispatch_df[region]['Timestamp'])
-
-        plt.figure(figsize=(14, 8))
-
-        # Apply smoothing directly before plotting
-        smoothed_demand = smooth_data(scheduled_demand_predispatch_df[region], 'Scheduled Demand Pre-dispatch_latest', window_size)
-        smoothed_supply = smooth_data(cleared_supply_dispatch_df[region], 'Cleared Supply Dispatch', window_size)
-
-        plt.plot(smoothed_demand['Timestamp'], smoothed_demand['Scheduled Demand Pre-dispatch_latest'], label='Scheduled Demand Pre-dispatch (Latest, Smoothed)')
-        plt.plot(smoothed_supply['Timestamp'], smoothed_supply['Cleared Supply Dispatch'], label='Cleared Supply Dispatch (Smoothed)')
-
-        plt.title(f"Scheduled Demand and Cleared Supply for {region} (Smoothed)")
-        plt.xlabel("Timestamp")
-        plt.ylabel("Volume")
-        plt.legend()
-        plt.grid(True)
-        plt.show()
-
-def plot_aggregated_prices(aggregated_forecast_prices, aggregated_trading_prices, window_size=5):
-    """
-    Plots aggregated forecast and trading prices with smoothing applied.
-    
-    Parameters:
-    - aggregated_forecast_prices: DataFrame containing aggregated forecast prices.
-    - aggregated_trading_prices: DataFrame containing aggregated trading prices.
-    - window_size: the number of periods used for smoothing.
-    """
-    # Smooth the aggregated data
-    smoothed_forecast_prices = smooth_data(aggregated_forecast_prices, 'Forecast Spot Price_latest', window_size)
-    smoothed_trading_prices = smooth_data(aggregated_trading_prices, 'Trading Price RRP', window_size)
-
-    plt.figure(figsize=(14, 8))
-    plt.plot(smoothed_forecast_prices['Timestamp'], smoothed_forecast_prices['Forecast Spot Price_latest'], label='Aggregated Forecast Spot Price (Smoothed)')
-    plt.plot(smoothed_trading_prices['Timestamp'], smoothed_trading_prices['Trading Price RRP'], label='Aggregated Trading Price RRP (Smoothed)')
-
-    plt.title("Aggregated Forecast and Trading Prices (Smoothed)")
-    plt.xlabel("Timestamp")
-    plt.ylabel("Price")
-    plt.legend()
-    plt.grid(True)
+    print(df.describe())
+    # Histograms for numeric data
+    df.hist(figsize=(15, 10))
+    plt.show()
+    # Pairplot for seeing pairwise relationships
+    sns.pairplot(df.select_dtypes(include=[np.number]))
+    plt.show()
+    # Heatmap for correlation matrix
+    corr_matrix = df.corr()
+    sns.heatmap(corr_matrix, annot=True, cmap='coolwarm')
     plt.show()
 
-def plot_aggregated_demand_supply(aggregated_demand, aggregated_supply, window_size=5):
+def hypothesis_testing(df):
     """
-    Plots aggregated demand and supply data with smoothing applied.
-    
-    Parameters:
-    - aggregated_demand: DataFrame containing aggregated demand data.
-    - aggregated_supply: DataFrame containing aggregated supply data.
-    - window_size: the number of periods used for smoothing.
+    Perform hypothesis testing:
+    - Example: Test if the mean RRP is significantly different between two regions.
     """
-    # Smooth the aggregated data
-    smoothed_demand = smooth_data(aggregated_demand, 'Scheduled Demand Pre-dispatch_latest', window_size)
-    smoothed_supply = smooth_data(aggregated_supply, 'Cleared Supply Dispatch', window_size)
+    region1 = df['DP_RRP_NSW1']
+    region2 = df['DP_RRP_QLD1']
+    t_stat, p_val = ttest_ind(region1, region2)
+    print(f"T-test result: T-stat={t_stat}, P-value={p_val}")
 
-    # Plotting
-    plt.figure(figsize=(18, 10))
-    plt.plot(smoothed_demand['Timestamp'], smoothed_demand['Scheduled Demand Pre-dispatch_latest'], label='Scheduled Demand (Latest, Smoothed)', color='red')
-    plt.plot(smoothed_supply['Timestamp'], smoothed_supply['Cleared Supply Dispatch'], label='Cleared Supply (Smoothed)', color='purple')
+def regression_analysis(df):
+    """
+    Conduct regression analysis to predict RRP based on other variables:
+    - Simple linear regression as an example.
+    """
+    # Select a dependent variable and one independent variable for simplicity
+    X = df[['DRS_TOTALDEMAND_NSW1']]  # Independent variable
+    y = df['DP_RRP_NSW1']  # Dependent variable
 
-    plt.title("Aggregated Demand and Supply (Smoothed)")
-    plt.xlabel("Timestamp")
-    plt.ylabel("Volume")
-    plt.legend()
-    plt.grid(True)
-    plt.show()
-    
-# Example usage
-directories = ['data/PredispatchIS_Reports', 'data/DispatchIS_Reports', 'data/TradingIS_Reports']
-forecast_spot_prices_df, scheduled_demand_predispatch_df, cleared_supply_dispatch_df, trading_price_rrp_df = read_and_preprocess(directories)
-aggregated_forecast_prices = aggregate_data_across_regions(forecast_spot_prices_df)
-aggregated_trading_prices = aggregate_data_across_regions(trading_price_rrp_df)
-aggregated_demand = aggregate_data_across_regions(scheduled_demand_predispatch_df)
-aggregated_supply = aggregate_data_across_regions(cleared_supply_dispatch_df)
+    # Split data into training and testing sets
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-plot_aggregated_prices(aggregated_forecast_prices, aggregated_trading_prices)
-plot_aggregated_demand_supply(aggregated_demand, aggregated_supply)
-plot_prices(forecast_spot_prices_df, trading_price_rrp_df)
-plot_demand_supply(scheduled_demand_predispatch_df, cleared_supply_dispatch_df)
+    # Create a linear regression model
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+
+    # Make predictions and evaluate the model
+    y_pred = model.predict(X_test)
+    mse = mean_squared_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
+    print(f"Mean Squared Error: {mse}, R^2 Score: {r2}")
+
+def main():
+    """
+    Main function to run the analysis steps.
+    """
+    filepath = 'combined_5min_data_head.csv'
+    df = load_data(filepath)
+    df = clean_data(df)
+    exploratory_data_analysis(df)
+    hypothesis_testing(df)
+    regression_analysis(df)
+
+if __name__ == "__main__":
+    main()
