@@ -163,10 +163,10 @@ def download_files(links, base_directory):
     return failed_downloads
 
 def main():
-    start_year = 2024
+    start_year = 2023
     start_month = 1
-    end_year = 2024
-    end_month = 2
+    end_year = 2023
+    end_month = 3
     regions = ['NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1']
 
     # Generate URLs for historical market data

@@ -1,126 +1,100 @@
-import matplotlib
-matplotlib.use('GTK3Agg')  # You can also try 'Qt5Agg' or 'GTK3Agg'
-import matplotlib.pyplot as plt
 import pandas as pd
 import os
+import logging
+from sklearn.preprocessing import MinMaxScaler
+from joblib import dump
+import multiprocessing
 
-def read_and_preprocess(directories):
-    forecast_spot_prices = {'SA1': [], 'NSW1': [], 'QLD1': [], 'TAS1': [], 'VIC1': []}
-    scheduled_demand_predispatch = {'SA1': [], 'NSW1': [], 'QLD1': [], 'TAS1': [], 'VIC1': []}
-    cleared_supply_dispatch = {'SA1': [], 'NSW1': [], 'QLD1': [], 'TAS1': [], 'VIC1': []}
-    trading_price_rrp = {'SA1': [], 'NSW1': [], 'QLD1': [], 'TAS1': [], 'VIC1': []}
-    timestamps_forecast = {'SA1': [], 'NSW1': [], 'QLD1': [], 'TAS1': [], 'VIC1': []}
-    timestamps_demand = {'SA1': [], 'NSW1': [], 'QLD1': [], 'TAS1': [], 'VIC1': []}
-    timestamps_supply = {'SA1': [], 'NSW1': [], 'QLD1': [], 'TAS1': [], 'VIC1': []}
-    timestamps_trading = {'SA1': [], 'NSW1': [], 'QLD1': [], 'TAS1': [], 'VIC1': []}
 
-    for directory_path in directories:
-        for filename in os.listdir(directory_path):
-            if filename.endswith('.CSV'):
-                file_path = os.path.join(directory_path, filename)
-                with open(file_path, 'r') as file:
-                    for line in file:
-                        parts = line.strip().split(',')
-                        if line.startswith('D,'):
-                            if directory_path.endswith('PredispatchIS_Reports'):
-                                if parts[1] == 'PREDISPATCH' and parts[2] == 'REGION_PRICES':
-                                    region = parts[6].strip('"')  # Extract region from REGION_PRICES
-                                    timestamp = parts[28].strip('"')  # Extract timestamp for REGION_PRICES
-                                    try:
-                                        forecast_spot_prices[region].append(float(parts[9]))
-                                        timestamps_forecast[region].append(timestamp)
-                                    except (ValueError, IndexError, KeyError):
-                                        print(f"Skipping line due to error in file {filename}: {line}")
-                                elif parts[1] == 'PREDISPATCH' and parts[2] == 'REGION_SOLUTION':
-                                    region = parts[6].strip('"')  # Extract region from REGION_SOLUTION
-                                    timestamp = parts[66].strip('"')  # Extract timestamp for REGION_SOLUTION
-                                    try:
-                                        scheduled_demand_predispatch[region].append(float(parts[68]))
-                                        timestamps_demand[region].append(timestamp)
-                                    except (ValueError, IndexError, KeyError):
-                                        print(f"Skipping line due to error in file {filename}: {line}")
-                            elif directory_path.endswith('DispatchIS_Reports'):
-                                region = parts[6].strip('"')  # Extract region from DISPATCH reports
-                                timestamp = parts[4].strip('"')  # Extract timestamp for DISPATCH reports
-                                if parts[1] == 'DISPATCH' and parts[2] == 'REGIONSUM':
-                                    try:
-                                        cleared_supply_dispatch[region].append(float(parts[69]))
-                                        timestamps_supply[region].append(timestamp)
-                                    except (ValueError, IndexError, KeyError):
-                                        print(f"Skipping line due to error in file {filename}: {line}")
-                            elif directory_path.endswith('TradingIS_Reports'):
-                                region = parts[6].strip('"')  # Extract region from TRADING reports
-                                timestamp = parts[4].strip('"')  # Extract timestamp for TRADING reports
-                                if parts[1] == 'TRADING' and parts[2] == 'PRICE':
-                                    try:
-                                        trading_price_rrp[region].append(float(parts[8]))
-                                        timestamps_trading[region].append(timestamp)
-                                    except (ValueError, IndexError, KeyError):
-                                        print(f"Skipping line due to error in file {filename}: {line}")
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-    # Convert lists to DataFrames and sort them
-    forecast_spot_prices_df = {}
-    scheduled_demand_predispatch_df = {}
-    cleared_supply_dispatch_df = {}
-    trading_price_rrp_df = {}
+def process_and_save(file_path, process_function, output_file, nrows=None):
+    df = process_function(file_path, nrows)
+    file_exists = os.path.exists(output_file)
+    df.to_csv(output_file, mode='a', header=not file_exists, index=False)
+    if file_exists:
+        logging.debug(f"{os.path.basename(file_path)} appended to {output_file}")
+    else:
+        logging.debug(f"{os.path.basename(file_path)} saved to {output_file}")
 
-    for region in ['SA1', 'NSW1', 'QLD1', 'TAS1', 'VIC1']:
-        forecast_spot_prices_df[region] = pd.DataFrame({'Timestamp': timestamps_forecast[region], 'Forecast Spot Price': forecast_spot_prices[region]}).sort_values(by='Timestamp')
-        scheduled_demand_predispatch_df[region] = pd.DataFrame({'Timestamp': timestamps_demand[region], 'Scheduled Demand Pre-dispatch': scheduled_demand_predispatch[region]}).sort_values(by='Timestamp')
-        cleared_supply_dispatch_df[region] = pd.DataFrame({'Timestamp': timestamps_supply[region], 'Cleared Supply Dispatch': cleared_supply_dispatch[region]}).sort_values(by='Timestamp')
-        trading_price_rrp_df[region] = pd.DataFrame({'Timestamp': timestamps_trading[region], 'Trading Price RRP': trading_price_rrp[region]}).sort_values(by='Timestamp')
+def process_constraint_solution(file_path, nrows=None):
+    df = pd.read_csv(file_path, header=1, nrows=nrows)
+    df['INTERVAL_DATETIME'] = pd.to_datetime(df['INTERVAL_DATETIME'], format='%Y/%m/%d %H:%M:%S')
+    selected_columns = ['INTERVAL_DATETIME', 'CONSTRAINTID', 'RHS', 'MARGINALVALUE', 'VIOLATIONDEGREE']
+    return df[selected_columns]
 
-        # Calculate the average forecast spot prices for each timestamp
-        forecast_spot_prices_avg_df = forecast_spot_prices_df[region].groupby('Timestamp').mean().reset_index()
+def process_interconnector_solution(file_path, nrows=None):
+    df = pd.read_csv(file_path, header=1, nrows=nrows)
+    df['INTERVAL_DATETIME'] = pd.to_datetime(df['INTERVAL_DATETIME'], format='%Y/%m/%d %H:%M:%S')
+    # Selecting the most relevant columns based on the correlation analysis
+    selected_columns = [
+        'INTERVAL_DATETIME', 'INTERCONNECTORID', 'METEREDMWFLOW', 'MWFLOW', 
+        'EXPORTLIMIT', 'IMPORTLIMIT', 'MWLOSSES', 'MARGINALLOSS', 'FCASEXPORTLIMIT', 'FCASIMPORTLIMIT'
+    ]
+    return df[selected_columns]
 
-        # Keep only the most recent forecast spot price data for each timestamp
-        forecast_spot_prices_latest_df = forecast_spot_prices_df[region].drop_duplicates(subset='Timestamp', keep='last')
+def process_region_solution(file_path, nrows=None):
+    df = pd.read_csv(file_path, header=1, nrows=nrows)
+    df['INTERVAL_DATETIME'] = pd.to_datetime(df['INTERVAL_DATETIME'], format='%Y/%m/%d %H:%M:%S')
+    # Updated selected columns based on top correlations from both analyses
+    selected_columns = [
+        'INTERVAL_DATETIME', 'REGIONID', 'RRP', 'TOTALDEMAND', 'AVAILABLEGENERATION', 
+        'DEMANDFORECAST', 'NETINTERCHANGE', 'ROP', 'RAISE5MINRRP', 'RAISE5MINROP', 
+        'LOWER60SECRRP', 'LOWER60SECROP', 'RAISEREGRRP', 'RAISEREGROP', 
+        'DEMAND_AND_NONSCHEDGEN'
+    ]
+    return df[selected_columns]
 
-        # Update the original forecast_spot_prices_df to include both most recent and average predictions
-        forecast_spot_prices_df[region] = pd.merge(forecast_spot_prices_latest_df, forecast_spot_prices_avg_df, on='Timestamp', suffixes=('_latest', '_avg'))
-
-        # Calculate the average predispatch data for each timestamp
-        scheduled_demand_predispatch_avg_df = scheduled_demand_predispatch_df[region].groupby('Timestamp').mean().reset_index()
-
-        # Keep only the most recent predispatch data for each timestamp
-        scheduled_demand_predispatch_latest_df = scheduled_demand_predispatch_df[region].drop_duplicates(subset='Timestamp', keep='last')
-
-        # Update the original DataFrame to include both most recent and average predictions
-        scheduled_demand_predispatch_df[region] = pd.merge(scheduled_demand_predispatch_latest_df, scheduled_demand_predispatch_avg_df, on='Timestamp', suffixes=('_latest', '_avg'))
-
-    return forecast_spot_prices_df, scheduled_demand_predispatch_df, cleared_supply_dispatch_df, trading_price_rrp_df
-
-def aggregate_data_across_regions(dataframes_dict):
-    """
-    Aggregates data across all regions by calculating the mean for each timestamp.
+def process_unit_solution(file_path, nrows=None):
+    df = pd.read_csv(file_path, header=1, nrows=nrows)
+    df['INTERVAL_DATETIME'] = pd.to_datetime(df['INTERVAL_DATETIME'], format='%Y/%m/%d %H:%M:%S')
     
-    Parameters:
-    - dataframes_dict: Dictionary of DataFrames for all regions.
+    # Extracting temporal features
+    df['HOUR'] = df['INTERVAL_DATETIME'].dt.hour
+    df['DAY_OF_WEEK'] = df['INTERVAL_DATETIME'].dt.dayofweek
+    df['MONTH'] = df['INTERVAL_DATETIME'].dt.month
+
+    selected_columns = [
+        'INTERVAL_DATETIME', 'HOUR', 'DAY_OF_WEEK', 'MONTH', 'DUID', 'INITIALMW', 'TOTALCLEARED', 'RAMPDOWNRATE', 
+        'RAMPUPRATE', 'AVAILABILITY', 'LOWER5MIN', 'LOWER60SEC', 'LOWER6SEC', 
+        'RAISE5MIN', 'RAISE60SEC', 'RAISE6SEC', 'AGCSTATUS', 'UIGF', 'CONFORMANCE_MODE'
+    ]
+    df_selected = df[selected_columns]
+
+    # Normalize numerical columns
+    numerical_cols = ['INITIALMW', 'TOTALCLEARED', 'RAMPDOWNRATE', 'RAMPUPRATE', 'AVAILABILITY', 
+                      'LOWER5MIN', 'LOWER60SEC', 'LOWER6SEC', 'RAISE5MIN', 'RAISE60SEC', 'RAISE6SEC']
+    scaler = MinMaxScaler()
+    df_selected[numerical_cols] = scaler.fit_transform(df_selected[numerical_cols].to_numpy())
+
+    dump(scaler, 'output/unit_solution_scaler.joblib')
+
+    return df_selected
+
+def read_and_preprocess(directory, data_type, limit_rows=None):
+    data_type = data_type.lower()  # Convert data_type to lowercase
+    process_map = {
+        'constraint_solution': process_constraint_solution,
+        'interconnector_solution': process_interconnector_solution,
+        'region_solution': process_region_solution,
+        'unit_solution': process_unit_solution
+    }
     
-    Returns:
-    - Aggregated DataFrame.
-    """
-    all_data = pd.concat(dataframes_dict.values(), ignore_index=True)
-    all_data['Timestamp'] = pd.to_datetime(all_data['Timestamp'])
-    aggregated_data = all_data.groupby('Timestamp').mean().reset_index()
-    return aggregated_data
+    if data_type not in process_map:
+        raise ValueError(f"Unsupported data type: {data_type}")
 
-# Example Usage
-directories = ['data/PredispatchIS_Reports', 'data/DispatchIS_Reports', 'data/TradingIS_Reports']
-forecast_spot_prices_df, scheduled_demand_predispatch_df, cleared_supply_dispatch_df, trading_price_rrp_df = read_and_preprocess(directories)
-aggregated_forecast_prices = aggregate_data_across_regions(forecast_spot_prices_df)
-aggregated_trading_prices = aggregate_data_across_regions(trading_price_rrp_df)
-aggregated_demand = aggregate_data_across_regions(scheduled_demand_predispatch_df)
-aggregated_supply = aggregate_data_across_regions(cleared_supply_dispatch_df)
+    files_to_process = [os.path.join(directory, f) for f in os.listdir(directory) if data_type.upper() in f]
+    output_file = f'output/{data_type}.csv'
+    
+    def worker(file_path):
+        process_and_save(file_path, process_map[data_type], output_file, nrows=limit_rows)
+        logging.debug(f"Processed {file_path} for {data_type}")
 
-# Print the .head() of each DataFrame for each region
-for region in ['SA1', 'NSW1', 'QLD1', 'TAS1', 'VIC1']:
-    print(f"Current region: {region}")
-    print(f"\n{region} - Trading Spot Price 5 min RRP DataFrame:")
-    print(trading_price_rrp_df[region].head(10))
-    print(f"{region} - Forecast Spot Prices DataFrame:")
-    print(forecast_spot_prices_df[region].head(10))
-    print(f"\n{region} - Scheduled Demand Pre-dispatch DataFrame:")
-    print(scheduled_demand_predispatch_df[region].head(10))
-    print(f"\n{region} - Cleared Supply Dispatch DataFrame:")
-    print(cleared_supply_dispatch_df[region].head(10))
+    # Set up a pool of processes
+    pool = multiprocessing.Pool(processes=multiprocessing.cpu_count())
+    pool.map(worker, files_to_process)
+    pool.close()
+    pool.join()
+
+    return f'output/{data_type}.csv'
