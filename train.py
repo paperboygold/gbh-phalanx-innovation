@@ -6,6 +6,7 @@ import pandas as pd
 from torch.nn import L1Loss 
 from joblib import load
 import torch.nn as nn
+import math
 import numpy as np
 import logging
 from sklearn.metrics import mean_squared_error, r2_score
@@ -142,12 +143,27 @@ class TransformerModel(nn.Module):
         self.output_linear = nn.Linear(model_dim, output_dim)
 
     def forward(self, src):
+        # Ensure src is at least 3D (batch_size, seq_len, features)
+        if src.dim() == 2:
+            src = src.unsqueeze(1)  # Add a sequence length of 1 if it's missing
         src = self.input_linear(src)
-        src = src.unsqueeze(1)  # Add batch dimension
+        max_len = src.size(1)
+        d_model = src.size(2)
+        positional_encoding = self.create_positional_encoding(max_len, d_model)
+        src = src + positional_encoding[:max_len, :].unsqueeze(0).repeat(src.size(0), 1, 1)
         output = self.transformer(src, src)
-        output = self.output_linear(output.squeeze(1))
+        output = self.output_linear(output[:, -1, :])
         return output
 
+    @staticmethod
+    def create_positional_encoding(max_len, d_model):
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        return pe
+    
 def train(model, dataset_class, train_dataloader, val_dataloader, epochs, l1_lambda, l2_lambda, lr, patience, use_cross_validation, n_splits, input_dim, model_dim, num_heads, num_encoder_layers, num_decoder_layers, output_dim, dropout_rate, dataloader_params):
     # Load and prepare the dataset
     processed_file_path = read_and_preprocess(directory='data', key=dataset_class.key, nrows=100)
@@ -261,12 +277,22 @@ if __name__ == "__main__":
         'REGIONSOLUTION': 'RegionSolutionDataset'
     }
 
+    # Best hyperparameters from tuning
+    best_hyperparams = {
+        'model_dim': 128,
+        'num_heads': 8,
+        'batch_size': 16,
+        'lr': 0.00015706709127239805,
+        'num_encoder_layers': 5,
+        'num_decoder_layers': 3,
+        'dropout_rate': 0.5372829108067698,
+        'l1_lambda': 0.08136709622470097,
+        'l2_lambda': 0.024021583705033336
+    }
+
     # Parameters for training
-    dataloader_params = {'batch_size': 16, 'shuffle': True}
+    dataloader_params = {'batch_size': best_hyperparams['batch_size'], 'shuffle': True}
     epochs = 3
-    l1_lambda = 0.08136709622470097
-    l2_lambda = 0.024021583705033336
-    lr = 0.00015706709127239805
     patience = 3
     use_cross_validation = True
     n_splits = 5
@@ -293,7 +319,7 @@ if __name__ == "__main__":
         elif key == 'REGIONSOLUTION':
             input_dim = 43
 
-        # Inside the loop where you initialize the model for training
+        # Determine the output dimension based on the dataset
         if key == 'CONSTRAINTSOLUTION':
             output_dim = 3
         elif key == 'INTERCONNECTORSOLN':
@@ -302,7 +328,6 @@ if __name__ == "__main__":
             output_dim = 2
         elif key == 'REGIONSOLUTION':
             output_dim = 1
-
 
         # Splitting the dataset into train and validation sets
         train_size = int(0.8 * len(full_dataset))
@@ -314,11 +339,20 @@ if __name__ == "__main__":
         val_dataloader = DataLoader(val_dataset, **dataloader_params)
 
         # Model initialization with dynamic input_dim
-        model = TransformerModel(input_dim=input_dim, model_dim=128, num_heads=8, num_encoder_layers=5, num_decoder_layers=3, output_dim=output_dim, dropout_rate=0.5372829108067698)
-        criterion = L1Loss()
+        model = TransformerModel(
+            input_dim=input_dim,
+            model_dim=best_hyperparams['model_dim'],
+            num_heads=best_hyperparams['num_heads'],
+            num_encoder_layers=best_hyperparams['num_encoder_layers'],
+            num_decoder_layers=best_hyperparams['num_decoder_layers'],
+            output_dim=output_dim,
+            dropout_rate=best_hyperparams['dropout_rate']
+        )
 
         # Train the model
-        train(model, dataset_class, train_dataloader, val_dataloader, epochs, l1_lambda, l2_lambda, lr, patience, use_cross_validation, n_splits)
+        train(
+            model, dataset_class, train_dataloader, val_dataloader, epochs, best_hyperparams['l1_lambda'], best_hyperparams['l2_lambda'], best_hyperparams['lr'], patience, use_cross_validation, n_splits, input_dim, best_hyperparams['model_dim'], best_hyperparams['num_heads'], best_hyperparams['num_encoder_layers'], best_hyperparams['num_decoder_layers'], output_dim, best_hyperparams['dropout_rate'], dataloader_params
+        )
 
         # Clear memory
         del full_dataset, train_dataset, val_dataset, train_dataloader, val_dataloader, model

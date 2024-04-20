@@ -175,6 +175,11 @@ def scale_and_save_data(combined_df, key):
             'WDR_INITIALMW', 'WDR_AVAILABLE', 'WDR_DISPATCHED'
         ] 
 
+    # Check if all columns are present
+    missing_cols = [col for col in numerical_cols if col not in combined_df.columns]
+    if missing_cols:
+        raise ValueError(f"Missing columns in DataFrame: {missing_cols}")
+
     scaler = StandardScaler()
     # Ensure only numerical columns are scaled
     combined_df[numerical_cols] = scaler.fit_transform(combined_df[numerical_cols])
