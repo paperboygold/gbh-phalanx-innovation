@@ -148,14 +148,14 @@ class TransformerModel(nn.Module):
         output = self.output_linear(output.squeeze(1))
         return output
 
-def train(model, dataset_class, train_dataloader, val_dataloader, epochs, l1_lambda=0.001, l2_lambda=0.001, lr=0.001, patience=3, use_cross_validation=True, n_splits=5):
+def train(model, dataset_class, train_dataloader, val_dataloader, epochs, l1_lambda, l2_lambda, lr, patience, use_cross_validation, n_splits, input_dim, model_dim, num_heads, num_encoder_layers, num_decoder_layers, output_dim, dropout_rate, dataloader_params):
     # Load and prepare the dataset
     processed_file_path = read_and_preprocess(directory='data', key=dataset_class.key, nrows=100)
     full_dataset = dataset_class(processed_file_path[0])
 
     # Splitting the dataset into train and validation sets
-    train_size = int(0.8 * len(full_dataset))  # 80% for training
-    val_size = len(full_dataset) - train_size  # 20% for validation
+    train_size = int(0.8 * len(full_dataset))
+    val_size = len(full_dataset) - train_size
     train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
 
     # Create DataLoaders for train and validation datasets
@@ -170,32 +170,29 @@ def train(model, dataset_class, train_dataloader, val_dataloader, epochs, l1_lam
         for fold, (train_idx, val_idx) in enumerate(kf.split(full_dataset)):
             logging.info(f"Fold {fold+1}: Train indices range from {train_idx[0]} to {train_idx[-1]}, Validation indices range from {val_idx[0]} to {val_idx[-1]}")
             
-            # Reinitialize model at the start of each fold
-            model = TransformerModel(input_dim=input_dim, model_dim=512, num_heads=8, num_encoder_layers=2, num_decoder_layers=2, output_dim=output_dim, dropout_rate=0.2927217971730249)
+            # Reinitialize model at the start of each fold using parameters passed to the function
+            model = TransformerModel(input_dim=input_dim, model_dim=model_dim, num_heads=num_heads, num_encoder_layers=num_encoder_layers, num_decoder_layers=num_decoder_layers, output_dim=output_dim, dropout_rate=dropout_rate)
 
             train_subset = torch.utils.data.Subset(full_dataset, train_idx)
             val_subset = torch.utils.data.Subset(full_dataset, val_idx)
-            logging.info(f"Sizes - Train subset: {len(train_subset)}, Validation subset: {len(val_subset)}")
 
             train_dataloader_fold = DataLoader(train_subset, batch_size=32, shuffle=True)
             val_dataloader_fold = DataLoader(val_subset, batch_size=32, shuffle=False)
             
-            print(f"Starting fold {fold+1}")
             fold_best_val_loss, fold_best_model_state = train_single_fold(model, train_dataloader_fold, val_dataloader_fold, epochs, l1_lambda, l2_lambda, lr, patience)
             
             if fold_best_val_loss < global_best_val_loss:
                 global_best_val_loss = fold_best_val_loss
                 global_best_model_info = {'fold': fold+1, 'state_dict': fold_best_model_state}
                 torch.save(global_best_model_info['state_dict'], f'best_model_fold_{global_best_model_info["fold"]}_val_loss_{global_best_val_loss:.4f}.pth')
-                print(f"New best model saved with Validation Loss: {global_best_val_loss} from Fold {global_best_model_info['fold']}")
-            print(f"Fold {fold+1} completed.")
+                logging.info(f"New best model saved with Validation Loss: {global_best_val_loss} from Fold {global_best_model_info['fold']}")
     else:
         train_single_fold(model, train_dataloader, val_dataloader, epochs, l1_lambda, l2_lambda, lr, patience)
 
-    print(f"Overall best model from Fold {global_best_model_info.get('fold', 'N/A')} with Validation Loss: {global_best_val_loss}")
+    logging.info(f"Overall best model from Fold {global_best_model_info.get('fold', 'N/A')} with Validation Loss: {global_best_val_loss}")
 
 def train_single_fold(model, train_dataloader, val_dataloader, epochs, l1_lambda, l2_lambda, lr, patience):
-    optimizer = Adam(model.parameters(), lr=lr)
+    optimizer = Adam(model.parameters(), lr=lr, weight_decay=l2_lambda)
     criterion = torch.nn.L1Loss()
     best_val_loss = float('inf')
     best_model_state = None
@@ -208,7 +205,11 @@ def train_single_fold(model, train_dataloader, val_dataloader, epochs, l1_lambda
             optimizer.zero_grad()
             outputs = model(features)
             loss = criterion(outputs, targets)
+            
+            # Calculate L1 regularization loss
             l1_loss = sum(p.abs().sum() for p in model.parameters())
+            
+            # Total loss includes L1 regularization
             total_loss = loss + l1_lambda * l1_loss
             total_loss.backward()
             optimizer.step()
@@ -251,98 +252,75 @@ def validate(model, dataloader):
                 raise e
     return total_loss / len(dataloader)
 
-def train_for_tuning(model, dataloader, optimizer, criterion):
-    model.train()
-    total_loss = 0
-    for features, targets in dataloader:
-        optimizer.zero_grad()
-        outputs = model(features)
-        loss = criterion(outputs, targets)
-        loss.backward()
-        optimizer.step()
-        total_loss += loss.item()
-    average_loss = total_loss / len(dataloader)
-    return average_loss
+if __name__ == "__main__":
+    # Mapping from keys used in preprocess.py to dataset class names in train.py
+    dataset_key_to_class_name = {
+        'INTERCONNECTORSOLN': 'InterconnectorSolutionDataset',
+        'UNITSOLUTION': 'UnitSolutionDataset',
+        'CONSTRAINTSOLUTION': 'ConstraintSolutionDataset',
+        'REGIONSOLUTION': 'RegionSolutionDataset'
+    }
 
-def validate_for_tuning(model, dataloader, criterion):
-    model.eval()
-    total_loss = 0
-    with torch.no_grad():
-        for features, targets in dataloader:
-            outputs = model(features)
-            loss = criterion(outputs, targets)
-            total_loss += loss.item()
-    average_loss = total_loss / len(dataloader)
-    return average_loss
+    # Parameters for training
+    dataloader_params = {'batch_size': 32, 'shuffle': True}
+    epochs = 3
+    l1_lambda = 0.001
+    l2_lambda = 0.001
+    lr = 0.001
+    patience = 3
+    use_cross_validation = True
+    n_splits = 5
 
-# Mapping from keys used in preprocess.py to dataset class names in train.py
-dataset_key_to_class_name = {
-    'INTERCONNECTORSOLN': 'InterconnectorSolutionDataset',
-    'UNITSOLUTION': 'UnitSolutionDataset',
-    'CONSTRAINTSOLUTION': 'ConstraintSolutionDataset',
-    'REGIONSOLUTION': 'RegionSolutionDataset'
-}
+    # List of dataset keys as used in preprocess.py
+    dataset_keys = ['REGIONSOLUTION']
 
-# Parameters for training
-dataloader_params = {'batch_size': 32, 'shuffle': True}
-epochs = 10
-l1_lambda = 0.001
-l2_lambda = 0.001
-lr = 0.001
-patience = 3
-use_cross_validation = True
-n_splits = 5
+    # Loop through each dataset key
+    for key in dataset_keys:
+        logging.info(f"Starting training for dataset key: {key}")
+        # Preprocess and read data
+        processed_file_path = read_and_preprocess(directory='data', key=key, nrows=100)
+        dataset_class_name = dataset_key_to_class_name[key]
+        dataset_class = globals()[dataset_class_name]  # Dynamically get the dataset class
+        full_dataset = dataset_class(processed_file_path[0])
 
-# List of dataset keys as used in preprocess.py
-dataset_keys = ['REGIONSOLUTION']
+        # Determine the input dimension based on the dataset
+        if key == 'INTERCONNECTORSOLN':
+            input_dim = 16
+        elif key == 'UNITSOLUTION':
+            input_dim = 27
+        elif key == 'CONSTRAINTSOLUTION':
+            input_dim = 6
+        elif key == 'REGIONSOLUTION':
+            input_dim = 43
 
-# Loop through each dataset key
-for key in dataset_keys:
-    logging.info(f"Starting training for dataset key: {key}")
-    # Preprocess and read data
-    processed_file_path = read_and_preprocess(directory='data', key=key, nrows=100)
-    dataset_class_name = dataset_key_to_class_name[key]
-    dataset_class = globals()[dataset_class_name]  # Dynamically get the dataset class
-    full_dataset = dataset_class(processed_file_path[0])
-
-    # Determine the input dimension based on the dataset
-    if key == 'INTERCONNECTORSOLN':
-        input_dim = 16
-    elif key == 'UNITSOLUTION':
-        input_dim = 27
-    elif key == 'CONSTRAINTSOLUTION':
-        input_dim = 6
-    elif key == 'REGIONSOLUTION':
-        input_dim = 43
-
-    # Inside the loop where you initialize the model for training
-    if key == 'CONSTRAINTSOLUTION':
-        output_dim = 3
-    elif key == 'INTERCONNECTORSOLN':
-        output_dim = 2
-    elif key == 'UNITSOLUTION':
-        output_dim = 2
-    elif key == 'REGIONSOLUTION':
-        output_dim = 1
+        # Inside the loop where you initialize the model for training
+        if key == 'CONSTRAINTSOLUTION':
+            output_dim = 3
+        elif key == 'INTERCONNECTORSOLN':
+            output_dim = 2
+        elif key == 'UNITSOLUTION':
+            output_dim = 2
+        elif key == 'REGIONSOLUTION':
+            output_dim = 1
 
 
-    # Splitting the dataset into train and validation sets
-    train_size = int(0.8 * len(full_dataset))
-    val_size = len(full_dataset) - train_size
-    train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
+        # Splitting the dataset into train and validation sets
+        train_size = int(0.8 * len(full_dataset))
+        val_size = len(full_dataset) - train_size
+        train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
 
-    # Create DataLoaders for train and validation datasets
-    train_dataloader = DataLoader(train_dataset, **dataloader_params)
-    val_dataloader = DataLoader(val_dataset, **dataloader_params)
+        # Create DataLoaders for train and validation datasets
+        train_dataloader = DataLoader(train_dataset, **dataloader_params)
+        val_dataloader = DataLoader(val_dataset, **dataloader_params)
 
-    # Model initialization with dynamic input_dim
-    model = TransformerModel(input_dim=input_dim, model_dim=512, num_heads=8, num_encoder_layers=2, num_decoder_layers=2, output_dim=output_dim, dropout_rate=0.2927217971730249)
-    criterion = L1Loss()
+        # Model initialization with dynamic input_dim
+        model = TransformerModel(input_dim=input_dim, model_dim=512, num_heads=8, num_encoder_layers=2, num_decoder_layers=2, output_dim=output_dim, dropout_rate=0.2927217971730249)
+        criterion = L1Loss()
 
-    # Train the model
-    train(model, dataset_class, train_dataloader, val_dataloader, epochs, l1_lambda, l2_lambda, lr, patience, use_cross_validation, n_splits)
+        # Train the model
+        train(model, dataset_class, train_dataloader, val_dataloader, epochs, l1_lambda, l2_lambda, lr, patience, use_cross_validation, n_splits)
 
-    # Clear memory
-    del full_dataset, train_dataset, val_dataset, train_dataloader, val_dataloader, model
-    gc.collect()  # Explicitly trigger garbage collection
-    logging.info(f"Finished training for dataset key: {key} and cleared memory.")
+        # Clear memory
+        del full_dataset, train_dataset, val_dataset, train_dataloader, val_dataloader, model
+        gc.collect()  # Explicitly trigger garbage collection
+        logging.info(f"Finished training for dataset key: {key} and cleared memory.")
