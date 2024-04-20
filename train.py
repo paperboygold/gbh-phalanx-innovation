@@ -262,11 +262,11 @@ if __name__ == "__main__":
     }
 
     # Parameters for training
-    dataloader_params = {'batch_size': 32, 'shuffle': True}
+    dataloader_params = {'batch_size': 16, 'shuffle': True}
     epochs = 3
-    l1_lambda = 0.001
-    l2_lambda = 0.001
-    lr = 0.001
+    l1_lambda = 0.08136709622470097
+    l2_lambda = 0.024021583705033336
+    lr = 0.00015706709127239805
     patience = 3
     use_cross_validation = True
     n_splits = 5
@@ -314,7 +314,7 @@ if __name__ == "__main__":
         val_dataloader = DataLoader(val_dataset, **dataloader_params)
 
         # Model initialization with dynamic input_dim
-        model = TransformerModel(input_dim=input_dim, model_dim=512, num_heads=8, num_encoder_layers=2, num_decoder_layers=2, output_dim=output_dim, dropout_rate=0.2927217971730249)
+        model = TransformerModel(input_dim=input_dim, model_dim=128, num_heads=8, num_encoder_layers=5, num_decoder_layers=3, output_dim=output_dim, dropout_rate=0.5372829108067698)
         criterion = L1Loss()
 
         # Train the model
