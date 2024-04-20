@@ -3,13 +3,11 @@ from torch.utils.data import Dataset, DataLoader
 from preprocess import read_and_preprocess
 from torch.optim import Adam
 import pandas as pd
-from torch.nn import L1Loss 
 from joblib import load
 import torch.nn as nn
 import math
 import numpy as np
 import logging
-from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import KFold
 import gc
 
@@ -279,21 +277,21 @@ if __name__ == "__main__":
 
     # Best hyperparameters from tuning
     best_hyperparams = {
-        'model_dim': 128,
-        'num_heads': 8,
+        'model_dim': 256,
+        'num_heads': 2,
         'batch_size': 16,
-        'lr': 0.00015706709127239805,
-        'num_encoder_layers': 5,
-        'num_decoder_layers': 3,
-        'dropout_rate': 0.5372829108067698,
-        'l1_lambda': 0.08136709622470097,
-        'l2_lambda': 0.024021583705033336
+        'lr': 0.00130961600938406,
+        'num_encoder_layers': 4,
+        'num_decoder_layers': 6,
+        'dropout_rate': 0.5631189875373072,
+        'l1_lambda': 2.804138558687802e-05,
+        'l2_lambda': 0.037841455862383855
     }
 
     # Parameters for training
     dataloader_params = {'batch_size': best_hyperparams['batch_size'], 'shuffle': True}
-    epochs = 3
-    patience = 3
+    epochs = 50
+    patience = 5
     use_cross_validation = True
     n_splits = 5
 

@@ -4,8 +4,6 @@ from train import TransformerModel, train, UnitSolutionDataset, InterconnectorSo
 from preprocess import read_and_preprocess
 import optuna
 import os
-from torch.optim import Adam
-from torch.nn import L1Loss
 
 # Mapping from keys to dataset classes
 dataset_key_to_class = {
@@ -54,8 +52,8 @@ def objective(trial):
     l2_lambda = trial.suggest_float('l2_lambda', 1e-5, 1e-1, log=True)
 
     # Training control parameters
-    epochs = 3  # Number of training epochs
-    patience = 3  # Patience for early stopping
+    epochs = 20  # Number of training epochs
+    patience = 5  # Patience for early stopping
     use_cross_validation = True  # Whether to use cross-validation
     n_splits = 5  # Number of splits for cross-validation
 
