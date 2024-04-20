@@ -60,6 +60,9 @@ class RegionSolutionDataset(Dataset):
         self.targets = self.data['RRP']  # Assuming 'RRP' is the target variable
         self.features = self.data.drop(columns=['RRP', 'INTERVAL_DATETIME'])  # Assuming these columns are not features
 
+        # Load the scalar
+        self.scaler = load('output/regionsolution_scaler.joblib')
+
     def __len__(self):
         return len(self.data)
 
