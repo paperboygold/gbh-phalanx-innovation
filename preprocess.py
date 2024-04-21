@@ -11,17 +11,6 @@ import re
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def process_and_save(file_path, process_function, output_file, nrows=None):
-    logging.info(f"Processing file: {file_path}")
-    df = process_function(file_path, nrows)
-    logging.info(f"Processed data shape: {df.shape}")
-    file_exists = os.path.exists(output_file)
-    df.to_csv(output_file, mode='a', header=not file_exists, index=False)
-    if file_exists:
-        logging.info(f"{os.path.basename(file_path)} appended to {output_file}")
-    else:
-        logging.info(f"{os.path.basename(file_path)} saved to {output_file}")
-
 def process_constraint_solution(file_path, nrows=None):
     df = pd.read_csv(file_path, header=1, nrows=nrows)
     df['INTERVAL_DATETIME'] = pd.to_datetime(df['INTERVAL_DATETIME'], format='%Y/%m/%d %H:%M:%S')

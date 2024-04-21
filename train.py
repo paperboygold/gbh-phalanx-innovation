@@ -359,7 +359,7 @@ if __name__ == "__main__":
 
             # Train the model
             train(
-                model, dataset_class, train_dataloader, val_dataloader, epochs, config['l1_lambda'], config['l2_lambda'], config['lr'], patience, use_cross_validation, n_splits, input_dim, config['model_dim'], config['num_heads'], config['num_encoder_layers'], config['num_decoder_layers'], output_dim, config['dropout_rate'], {'batch_size': config['batch_size'], 'shuffle': True, 'nrows': nrows}
+                model, dataset_class, train_dataloader, val_dataloader, epochs, config['l1_lambda'], config['l2_lambda'], config['lr'], patience, use_cross_validation, n_splits, input_dim, config['model_dim'], config['num_heads'], config['num_encoder_layers'], config['num_decoder_layers'], output_dim, config['dropout_rate'], {'batch_size': config['batch_size'], 'shuffle': True}, nrows
             )
 
             # Clear memory for the next iteration
