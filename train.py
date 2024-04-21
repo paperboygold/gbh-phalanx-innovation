@@ -162,9 +162,9 @@ class TransformerModel(nn.Module):
         pe[:, 1::2] = torch.cos(position * div_term)
         return pe
     
-def train(model, dataset_class, train_dataloader, val_dataloader, epochs, l1_lambda, l2_lambda, lr, patience, use_cross_validation, n_splits, input_dim, model_dim, num_heads, num_encoder_layers, num_decoder_layers, output_dim, dropout_rate, dataloader_params):
+def train(model, dataset_class, train_dataloader, val_dataloader, epochs, l1_lambda, l2_lambda, lr, patience, use_cross_validation, n_splits, input_dim, model_dim, num_heads, num_encoder_layers, num_decoder_layers, output_dim, dropout_rate, dataloader_params, nrows):
     # Load and prepare the dataset
-    processed_file_path = read_and_preprocess(directory='data', key=dataset_class.key, nrows=100)
+    processed_file_path = read_and_preprocess(directory='data', key=dataset_class.key, nrows=nrows)
     full_dataset = dataset_class(processed_file_path[0])
 
     # Splitting the dataset into train and validation sets
@@ -266,6 +266,44 @@ def validate(model, dataloader):
                 raise e
     return total_loss / len(dataloader)
 
+
+# Define model configurations
+model_configs = [
+    {
+        'model_dim': 256,
+        'num_heads': 2,
+        'num_encoder_layers': 4,
+        'num_decoder_layers': 6,
+        'dropout_rate': 0.5631189875373072,
+        'l1_lambda': 2.804138558687802e-05,
+        'l2_lambda': 0.037841455862383855,
+        'lr': 0.00130961600938406,
+        'batch_size': 16
+    },
+    {
+        'model_dim': 256,
+        'num_heads': 4,
+        'num_encoder_layers': 4,
+        'num_decoder_layers': 8,
+        'dropout_rate': 0.6,
+        'l1_lambda': 2.804138558687802e-05,
+        'l2_lambda': 0.04,
+        'lr': 0.001,
+        'batch_size': 16
+    },
+    {
+        'model_dim': 512,
+        'num_heads': 4,
+        'num_encoder_layers': 6,
+        'num_decoder_layers': 6,
+        'dropout_rate': 0.5,
+        'l1_lambda': 3e-05,
+        'l2_lambda': 0.035,
+        'lr': 0.0012,
+        'batch_size': 16
+    }
+]
+
 if __name__ == "__main__":
     # Mapping from keys used in preprocess.py to dataset class names in train.py
     dataset_key_to_class_name = {
@@ -275,25 +313,12 @@ if __name__ == "__main__":
         'REGIONSOLUTION': 'RegionSolutionDataset'
     }
 
-    # Best hyperparameters from tuning
-    best_hyperparams = {
-        'model_dim': 256,
-        'num_heads': 2,
-        'batch_size': 16,
-        'lr': 0.00130961600938406,
-        'num_encoder_layers': 4,
-        'num_decoder_layers': 6,
-        'dropout_rate': 0.5631189875373072,
-        'l1_lambda': 2.804138558687802e-05,
-        'l2_lambda': 0.037841455862383855
-    }
-
     # Parameters for training
-    dataloader_params = {'batch_size': best_hyperparams['batch_size'], 'shuffle': True}
     epochs = 50
     patience = 5
     use_cross_validation = True
     n_splits = 5
+    nrows = 100
 
     # List of dataset keys as used in preprocess.py
     dataset_keys = ['REGIONSOLUTION']
@@ -302,30 +327,14 @@ if __name__ == "__main__":
     for key in dataset_keys:
         logging.info(f"Starting training for dataset key: {key}")
         # Preprocess and read data
-        processed_file_path = read_and_preprocess(directory='data', key=key, nrows=100)
+        processed_file_path = read_and_preprocess(directory='data', key=key, nrows=nrows)
         dataset_class_name = dataset_key_to_class_name[key]
         dataset_class = globals()[dataset_class_name]  # Dynamically get the dataset class
         full_dataset = dataset_class(processed_file_path[0])
 
-        # Determine the input dimension based on the dataset
-        if key == 'INTERCONNECTORSOLN':
-            input_dim = 16
-        elif key == 'UNITSOLUTION':
-            input_dim = 27
-        elif key == 'CONSTRAINTSOLUTION':
-            input_dim = 6
-        elif key == 'REGIONSOLUTION':
-            input_dim = 43
-
-        # Determine the output dimension based on the dataset
-        if key == 'CONSTRAINTSOLUTION':
-            output_dim = 3
-        elif key == 'INTERCONNECTORSOLN':
-            output_dim = 2
-        elif key == 'UNITSOLUTION':
-            output_dim = 2
-        elif key == 'REGIONSOLUTION':
-            output_dim = 1
+        # Determine the input and output dimensions based on the dataset
+        input_dim = {'INTERCONNECTORSOLN': 16, 'UNITSOLUTION': 27, 'CONSTRAINTSOLUTION': 6, 'REGIONSOLUTION': 43}[key]
+        output_dim = {'CONSTRAINTSOLUTION': 3, 'INTERCONNECTORSOLN': 2, 'UNITSOLUTION': 2, 'REGIONSOLUTION': 1}[key]
 
         # Splitting the dataset into train and validation sets
         train_size = int(0.8 * len(full_dataset))
@@ -333,26 +342,29 @@ if __name__ == "__main__":
         train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
 
         # Create DataLoaders for train and validation datasets
-        train_dataloader = DataLoader(train_dataset, **dataloader_params)
-        val_dataloader = DataLoader(val_dataset, **dataloader_params)
+        train_dataloader = DataLoader(train_dataset, batch_size=model_configs[0]['batch_size'], shuffle=True)
+        val_dataloader = DataLoader(val_dataset, batch_size=model_configs[0]['batch_size'], shuffle=False)
 
-        # Model initialization with dynamic input_dim
-        model = TransformerModel(
-            input_dim=input_dim,
-            model_dim=best_hyperparams['model_dim'],
-            num_heads=best_hyperparams['num_heads'],
-            num_encoder_layers=best_hyperparams['num_encoder_layers'],
-            num_decoder_layers=best_hyperparams['num_decoder_layers'],
-            output_dim=output_dim,
-            dropout_rate=best_hyperparams['dropout_rate']
-        )
+        # Train each model variant
+        for config in model_configs:
+            model = TransformerModel(
+                input_dim=input_dim,
+                model_dim=config['model_dim'],
+                num_heads=config['num_heads'],
+                num_encoder_layers=config['num_encoder_layers'],
+                num_decoder_layers=config['num_decoder_layers'],
+                output_dim=output_dim,
+                dropout_rate=config['dropout_rate']
+            )
 
-        # Train the model
-        train(
-            model, dataset_class, train_dataloader, val_dataloader, epochs, best_hyperparams['l1_lambda'], best_hyperparams['l2_lambda'], best_hyperparams['lr'], patience, use_cross_validation, n_splits, input_dim, best_hyperparams['model_dim'], best_hyperparams['num_heads'], best_hyperparams['num_encoder_layers'], best_hyperparams['num_decoder_layers'], output_dim, best_hyperparams['dropout_rate'], dataloader_params
-        )
+            # Train the model
+            train(
+                model, dataset_class, train_dataloader, val_dataloader, epochs, config['l1_lambda'], config['l2_lambda'], config['lr'], patience, use_cross_validation, n_splits, input_dim, config['model_dim'], config['num_heads'], config['num_encoder_layers'], config['num_decoder_layers'], output_dim, config['dropout_rate'], {'batch_size': config['batch_size'], 'shuffle': True, 'nrows': nrows}
+            )
 
-        # Clear memory
-        del full_dataset, train_dataset, val_dataset, train_dataloader, val_dataloader, model
-        gc.collect()  # Explicitly trigger garbage collection
-        logging.info(f"Finished training for dataset key: {key} and cleared memory.")
+            # Clear memory for the next iteration
+            del model
+            gc.collect()
+            logging.info(f"Finished training model variant with {config['num_decoder_layers']} decoder layers and cleared memory.")
+            logging.info(f"Model configuration: {config}")
+    logging.info("All model training completed.")
