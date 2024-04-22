@@ -10,6 +10,7 @@ import numpy as np
 import logging
 from sklearn.model_selection import KFold
 import gc
+from torch.optim.lr_scheduler import ExponentialLR
 
 
 logging.basicConfig(level=logging.INFO)
@@ -162,7 +163,7 @@ class TransformerModel(nn.Module):
         pe[:, 1::2] = torch.cos(position * div_term)
         return pe
     
-def train(model, dataset_class, train_dataloader, val_dataloader, epochs, l1_lambda, l2_lambda, lr, patience, use_cross_validation, n_splits, input_dim, model_dim, num_heads, num_encoder_layers, num_decoder_layers, output_dim, dropout_rate, dataloader_params, nrows):
+def train(model, dataset_class, train_dataloader, val_dataloader, epochs, l1_lambda, l2_lambda, lr, patience, use_cross_validation, n_splits, input_dim, model_dim, num_heads, num_encoder_layers, num_decoder_layers, output_dim, dropout_rate, dataloader_params, nrows, gamma):
     # Load and prepare the dataset
     processed_file_path = read_and_preprocess(directory='data', key=dataset_class.key, nrows=nrows)
     full_dataset = dataset_class(processed_file_path[0])
@@ -193,7 +194,7 @@ def train(model, dataset_class, train_dataloader, val_dataloader, epochs, l1_lam
             train_dataloader_fold = DataLoader(train_subset, batch_size=32, shuffle=True)
             val_dataloader_fold = DataLoader(val_subset, batch_size=32, shuffle=False)
             
-            fold_best_val_loss, fold_best_model_state = train_single_fold(model, train_dataloader_fold, val_dataloader_fold, epochs, l1_lambda, l2_lambda, lr, patience)
+            fold_best_val_loss, fold_best_model_state = train_single_fold(model, train_dataloader_fold, val_dataloader_fold, epochs, l1_lambda, l2_lambda, lr, patience, gamma)
             
             if fold_best_val_loss < global_best_val_loss:
                 global_best_val_loss = fold_best_val_loss
@@ -201,12 +202,13 @@ def train(model, dataset_class, train_dataloader, val_dataloader, epochs, l1_lam
                 torch.save(global_best_model_info['state_dict'], f'best_model_fold_{global_best_model_info["fold"]}_val_loss_{global_best_val_loss:.4f}.pth')
                 logging.info(f"New best model saved with Validation Loss: {global_best_val_loss} from Fold {global_best_model_info['fold']}")
     else:
-        train_single_fold(model, train_dataloader, val_dataloader, epochs, l1_lambda, l2_lambda, lr, patience)
+        train_single_fold(model, train_dataloader, val_dataloader, epochs, l1_lambda, l2_lambda, lr, patience, gamma)
 
     logging.info(f"Overall best model from Fold {global_best_model_info.get('fold', 'N/A')} with Validation Loss: {global_best_val_loss}")
 
-def train_single_fold(model, train_dataloader, val_dataloader, epochs, l1_lambda, l2_lambda, lr, patience):
+def train_single_fold(model, train_dataloader, val_dataloader, epochs, l1_lambda, l2_lambda, lr, patience, gamma):
     optimizer = Adam(model.parameters(), lr=lr, weight_decay=l2_lambda)
+    scheduler = ExponentialLR(optimizer, gamma=gamma)  # Use the gamma parameter
     criterion = torch.nn.L1Loss()
     best_val_loss = float('inf')
     best_model_state = None
@@ -219,27 +221,26 @@ def train_single_fold(model, train_dataloader, val_dataloader, epochs, l1_lambda
             optimizer.zero_grad()
             outputs = model(features)
             loss = criterion(outputs, targets)
-            
-            # Calculate L1 regularization loss
             l1_loss = sum(p.abs().sum() for p in model.parameters())
-            
-            # Total loss includes L1 regularization
             total_loss = loss + l1_lambda * l1_loss
             total_loss.backward()
             optimizer.step()
             epoch_loss += total_loss.item()
         
+        scheduler.step()  # Update the learning rate
         validation_loss = validate(model, val_dataloader)
-        logging.info(f"Epoch {epoch+1}, Validation Loss: {validation_loss}")
-        
+        logging.info(f"Epoch {epoch+1}, Validation Loss: {validation_loss}, Best Validation Loss: {best_val_loss}")
+
         if validation_loss < best_val_loss:
             best_val_loss = validation_loss
             best_model_state = model.state_dict()
             epochs_no_improve = 0
+            logging.info("Validation loss improved, resetting patience.")
         else:
             epochs_no_improve += 1
+            logging.info(f"No improvement in validation loss for {epochs_no_improve} epochs.")
             if epochs_no_improve > patience:
-                logging.info(f"Stopping early after {epoch+1} epochs.")
+                logging.info(f"Stopping early after {epoch+1} epochs due to no improvement in validation loss.")
                 break
 
     return best_val_loss, best_model_state
@@ -267,43 +268,6 @@ def validate(model, dataloader):
     return total_loss / len(dataloader)
 
 
-# Define model configurations
-model_configs = [
-    {
-        'model_dim': 256,
-        'num_heads': 2,
-        'num_encoder_layers': 4,
-        'num_decoder_layers': 6,
-        'dropout_rate': 0.5631189875373072,
-        'l1_lambda': 2.804138558687802e-05,
-        'l2_lambda': 0.037841455862383855,
-        'lr': 0.00130961600938406,
-        'batch_size': 16
-    },
-    {
-        'model_dim': 256,
-        'num_heads': 4,
-        'num_encoder_layers': 4,
-        'num_decoder_layers': 8,
-        'dropout_rate': 0.6,
-        'l1_lambda': 2.804138558687802e-05,
-        'l2_lambda': 0.04,
-        'lr': 0.001,
-        'batch_size': 16
-    },
-    {
-        'model_dim': 512,
-        'num_heads': 4,
-        'num_encoder_layers': 6,
-        'num_decoder_layers': 6,
-        'dropout_rate': 0.5,
-        'l1_lambda': 3e-05,
-        'l2_lambda': 0.035,
-        'lr': 0.0012,
-        'batch_size': 16
-    }
-]
-
 if __name__ == "__main__":
     # Mapping from keys used in preprocess.py to dataset class names in train.py
     dataset_key_to_class_name = {
@@ -318,7 +282,21 @@ if __name__ == "__main__":
     patience = 5
     use_cross_validation = True
     n_splits = 5
-    nrows = 100
+    nrows = 10000
+
+    # Model configuration
+    model_config = {
+        'model_dim': 512,
+        'num_heads': 4,
+        'num_encoder_layers': 6,
+        'num_decoder_layers': 4,
+        'dropout_rate': 0.4366813665078332,
+        'l1_lambda': 0.00235596007610553,
+        'l2_lambda': 0.009789422077568735,
+        'lr': 0.00048003182324549685,
+        'batch_size': 64,
+        'gamma': 0.9765306136576826
+    }
 
     # List of dataset keys as used in preprocess.py
     dataset_keys = ['REGIONSOLUTION']
@@ -342,29 +320,27 @@ if __name__ == "__main__":
         train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
 
         # Create DataLoaders for train and validation datasets
-        train_dataloader = DataLoader(train_dataset, batch_size=model_configs[0]['batch_size'], shuffle=True)
-        val_dataloader = DataLoader(val_dataset, batch_size=model_configs[0]['batch_size'], shuffle=False)
+        train_dataloader = DataLoader(train_dataset, batch_size=model_config['batch_size'], shuffle=True)
+        val_dataloader = DataLoader(val_dataset, batch_size=model_config['batch_size'], shuffle=False)
 
-        # Train each model variant
-        for config in model_configs:
-            model = TransformerModel(
-                input_dim=input_dim,
-                model_dim=config['model_dim'],
-                num_heads=config['num_heads'],
-                num_encoder_layers=config['num_encoder_layers'],
-                num_decoder_layers=config['num_decoder_layers'],
-                output_dim=output_dim,
-                dropout_rate=config['dropout_rate']
-            )
+        # Initialize the model
+        model = TransformerModel(
+            input_dim=input_dim,
+            model_dim=model_config['model_dim'],
+            num_heads=model_config['num_heads'],
+            num_encoder_layers=model_config['num_encoder_layers'],
+            num_decoder_layers=model_config['num_decoder_layers'],
+            output_dim=output_dim,
+            dropout_rate=model_config['dropout_rate']
+        )
 
-            # Train the model
-            train(
-                model, dataset_class, train_dataloader, val_dataloader, epochs, config['l1_lambda'], config['l2_lambda'], config['lr'], patience, use_cross_validation, n_splits, input_dim, config['model_dim'], config['num_heads'], config['num_encoder_layers'], config['num_decoder_layers'], output_dim, config['dropout_rate'], {'batch_size': config['batch_size'], 'shuffle': True}, nrows
-            )
+        # Train the model
+        train(
+            model, dataset_class, train_dataloader, val_dataloader, epochs, model_config['l1_lambda'], model_config['l2_lambda'], model_config['lr'], patience, use_cross_validation, n_splits, input_dim, model_config['model_dim'], model_config['num_heads'], model_config['num_encoder_layers'], model_config['num_decoder_layers'], output_dim, model_config['dropout_rate'], {'batch_size': model_config['batch_size'], 'shuffle': True}, nrows, model_config['gamma']
+        )
 
-            # Clear memory for the next iteration
-            del model
-            gc.collect()
-            logging.info(f"Finished training model variant with {config['num_decoder_layers']} decoder layers and cleared memory.")
-            logging.info(f"Model configuration: {config}")
+        # Clear memory for the next iteration
+        del model
+        gc.collect()
+        logging.info("Finished training model and cleared memory.")
     logging.info("All model training completed.")

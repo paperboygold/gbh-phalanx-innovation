@@ -32,41 +32,21 @@ def load_data(dataset_key):
     return train_dataset, val_dataset
 
 def objective(trial):
-    # Determine the model configuration based on the trial number
-    if trial.number % 3 == 0:
-        # Configuration for Model 1
-        model_dim_options = [256, 512]
-        num_heads_options = [2, 4]
-        num_encoder_layers_options = [4, 6]
-        num_decoder_layers_options = [4, 6]
-        dropout_rate_options = [0.1, 0.2]
-    elif trial.number % 3 == 1:
-        # Configuration for Model 2
-        model_dim_options = [512, 1024]
-        num_heads_options = [4, 8]
-        num_encoder_layers_options = [6, 8]
-        num_decoder_layers_options = [6, 8]
-        dropout_rate_options = [0.3, 0.4]
-    else:
-        # Configuration for Model 3
-        model_dim_options = [128, 256]
-        num_heads_options = [2, 4]
-        num_encoder_layers_options = [2, 4]
-        num_decoder_layers_options = [2, 4]
-        dropout_rate_options = [0.5, 0.6]
+    # Suggest model configuration parameters
+    model_dim = trial.suggest_categorical('model_dim', [128, 256, 512, 1024])
+    # Ensure num_heads is a divisor of model_dim
+    possible_heads = [h for h in [2, 4, 8, 12, 16] if model_dim % h == 0]
+    num_heads = trial.suggest_categorical('num_heads', possible_heads)
+    num_encoder_layers = trial.suggest_categorical('num_encoder_layers', [2, 4, 6, 8, 12, 16])
+    num_decoder_layers = trial.suggest_categorical('num_decoder_layers', [2, 4, 6, 8, 12, 16])
+    dropout_rate = trial.suggest_float('dropout_rate', 0.01, 0.99, log=True)
+    gamma = trial.suggest_float('gamma', 0.55, 3.0, log=False)  # Suggest gamma value for learning rate decay
 
-    # Suggest model dimension
-    model_dim = trial.suggest_categorical('model_dim', model_dim_options)
-    num_heads = trial.suggest_categorical('num_heads', [h for h in num_heads_options if model_dim % h == 0])
-    num_encoder_layers = trial.suggest_categorical('num_encoder_layers', num_encoder_layers_options)
-    num_decoder_layers = trial.suggest_categorical('num_decoder_layers', num_decoder_layers_options)
-    dropout_rate = trial.suggest_categorical('dropout_rate', dropout_rate_options)
-
-    # Common parameters for all models
-    batch_size = trial.suggest_categorical('batch_size', [16, 32, 64])
-    lr = trial.suggest_float('lr', 1e-5, 1e-1, log=True)
-    l1_lambda = trial.suggest_float('l1_lambda', 1e-5, 1e-1, log=True)
-    l2_lambda = trial.suggest_float('l2_lambda', 1e-5, 1e-1, log=True)
+    # Suggest common parameters
+    batch_size = trial.suggest_categorical('batch_size', [16, 32, 64, 128])
+    lr = trial.suggest_float('lr', 1e-4, 1e-1, log=True)
+    l1_lambda = trial.suggest_float('l1_lambda', 1e-4, 1e-1, log=True)
+    l2_lambda = trial.suggest_float('l2_lambda', 1e-5, 1e-2, log=False)
 
     # DataLoader and dataset setup
     dataloader_params = {'batch_size': batch_size, 'shuffle': True}
@@ -83,19 +63,21 @@ def objective(trial):
     epochs = 50
     patience = 5
     splits = 5
-    use_cross_validation = True
-    nrows = 100
+    use_cross_validation = False
+    nrows = 10000
 
     # Create model
     model = TransformerModel(input_dim=input_dim, model_dim=model_dim, num_heads=num_heads, num_encoder_layers=num_encoder_layers, num_decoder_layers=num_decoder_layers, output_dim=output_dim, dropout_rate=dropout_rate)
     
-    # Train the model using the train function
-    train(model, RegionSolutionDataset, train_dataloader, val_dataloader, epochs, l1_lambda, l2_lambda, lr, patience, use_cross_validation, splits, input_dim, model_dim, num_heads, num_encoder_layers, num_decoder_layers, output_dim, dropout_rate, dataloader_params, nrows)
-    
+    # Train the model using the train function with all parameters including gamma
+    train(
+        model, RegionSolutionDataset, train_dataloader, val_dataloader, epochs, l1_lambda, l2_lambda, lr, patience, use_cross_validation, splits, input_dim, model_dim, num_heads, num_encoder_layers, num_decoder_layers, output_dim, dropout_rate, dataloader_params, nrows, gamma
+    )
+
     # Validation loop to calculate total validation loss
     total_val_loss = validate(model, val_dataloader)
 
-    # Composite objective
+    # Return the objective value
     return total_val_loss  # Minimize validation loss
 
 study = optuna.create_study(direction='minimize')

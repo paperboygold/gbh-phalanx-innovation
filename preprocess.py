@@ -241,5 +241,3 @@ def read_and_preprocess(directory, key=None, nrows=None):
         return [f'output/{key.lower()}.csv']
     else:
         return [f'output/{k.lower()}.csv' for k in process_map]
-
-read_and_preprocess(directory='data', key='REGIONSOLUTION', nrows=100)
