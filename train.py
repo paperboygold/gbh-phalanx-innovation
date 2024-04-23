@@ -11,6 +11,8 @@ import logging
 from sklearn.model_selection import KFold
 import gc
 from torch.optim.lr_scheduler import ExponentialLR
+import h5py
+from torch.cuda.amp import GradScaler, autocast
 
 
 logging.basicConfig(level=logging.INFO)
@@ -55,25 +57,25 @@ class InterconnectorSolutionDataset(Dataset):
 class RegionSolutionDataset(Dataset):
     key = "REGIONSOLUTION"
 
-    def __init__(self, csv_file):
-        self.data = pd.read_csv(csv_file)
-        self.targets = self.data['RRP']  # Assuming 'RRP' is the target variable
-        self.features = self.data.drop(columns=['RRP', 'INTERVAL_DATETIME'])  # Assuming these columns are not features
-
-        # Load the scalar
+    def __init__(self, h5_file):
+        # Load the scaler
         self.scaler = load('output/regionsolution_scaler.joblib')
 
+        with h5py.File(h5_file, 'r') as h5f:
+            # Load all features except 'RRP' and 'INTERVAL_DATETIME' which are not used as features
+            feature_columns = [col for col in h5f.keys() if col not in ['RRP', 'INTERVAL_DATETIME']]
+            # Stack all feature columns horizontally
+            self.features = torch.tensor([h5f[col][:] for col in feature_columns], dtype=torch.float32).t()
+
+            # Load 'RRP' as the target
+            self.targets = torch.tensor(h5f['RRP'][:], dtype=torch.float32)
+            self.targets = self.targets.unsqueeze(-1)  # Ensure targets have the correct shape
+
     def __len__(self):
-        return len(self.data)
+        return len(self.targets)
 
     def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
-
-        features = torch.tensor(self.features.iloc[idx].values, dtype=torch.float32)
-        target = torch.tensor(self.targets.iloc[idx], dtype=torch.float32)
-        target = target.unsqueeze(-1)  # Add an extra dimension to match the output shape of the model
-        return features, target
+        return self.features[idx], self.targets[idx]
     
 class ConstraintSolutionDataset(Dataset):
     key = "CONSTRAINTSOLUTION"
@@ -208,23 +210,29 @@ def train(model, dataset_class, train_dataloader, val_dataloader, epochs, l1_lam
 
 def train_single_fold(model, train_dataloader, val_dataloader, epochs, l1_lambda, l2_lambda, lr, patience, gamma):
     optimizer = Adam(model.parameters(), lr=lr, weight_decay=l2_lambda)
-    scheduler = ExponentialLR(optimizer, gamma=gamma)  # Use the gamma parameter
+    scheduler = ExponentialLR(optimizer, gamma=gamma)
     criterion = torch.nn.L1Loss()
     best_val_loss = float('inf')
     best_model_state = None
     epochs_no_improve = 0
+    scaler = GradScaler()  # Initialize the gradient scaler for mixed precision
 
     for epoch in range(epochs):
         model.train()
         epoch_loss = 0
         for features, targets in train_dataloader:
+            features, targets = features.to(device), targets.to(device)
             optimizer.zero_grad()
-            outputs = model(features)
-            loss = criterion(outputs, targets)
-            l1_loss = sum(p.abs().sum() for p in model.parameters())
-            total_loss = loss + l1_lambda * l1_loss
-            total_loss.backward()
-            optimizer.step()
+            
+            with autocast():  # Enable automatic mixed precision
+                outputs = model(features)
+                loss = criterion(outputs, targets)
+                l1_loss = sum(p.abs().sum() for p in model.parameters())
+                total_loss = loss + l1_lambda * l1_loss
+            
+            scaler.scale(total_loss).backward()  # Scale the loss, compute scaled gradients
+            scaler.step(optimizer)  # Update optimizer
+            scaler.update()  # Update the scale for next iteration
             epoch_loss += total_loss.item()
         
         scheduler.step()  # Update the learning rate
@@ -269,6 +277,9 @@ def validate(model, dataloader):
 
 
 if __name__ == "__main__":
+    # Check if CUDA is available and set the device accordingly
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     # Mapping from keys used in preprocess.py to dataset class names in train.py
     dataset_key_to_class_name = {
         'INTERCONNECTORSOLN': 'InterconnectorSolutionDataset',
@@ -319,9 +330,9 @@ if __name__ == "__main__":
         val_size = len(full_dataset) - train_size
         train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
 
-        # Create DataLoaders for train and validation datasets
-        train_dataloader = DataLoader(train_dataset, batch_size=model_config['batch_size'], shuffle=True)
-        val_dataloader = DataLoader(val_dataset, batch_size=model_config['batch_size'], shuffle=False)
+        # Create DataLoaders for train and validation datasets with optimized settings
+        train_dataloader = DataLoader(train_dataset, batch_size=model_config['batch_size'], shuffle=True, num_workers=4, pin_memory=True)
+        val_dataloader = DataLoader(val_dataset, batch_size=model_config['batch_size'], shuffle=False, num_workers=4, pin_memory=True)
 
         # Initialize the model
         model = TransformerModel(

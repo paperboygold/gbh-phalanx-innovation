@@ -4,3 +4,5 @@ torch
 scikit-learn
 joblib
 optuna
+bs4
+h5py

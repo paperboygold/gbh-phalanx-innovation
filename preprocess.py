@@ -6,6 +6,8 @@ from joblib import dump
 import multiprocessing
 from sklearn.preprocessing import LabelEncoder
 import re
+import h5py
+
 
 
 # Set up logging
@@ -174,8 +176,13 @@ def scale_and_save_data(combined_df, key):
     combined_df[numerical_cols] = scaler.fit_transform(combined_df[numerical_cols])
     scaler_filename = f'output/{key.lower()}_scaler.joblib'
     dump(scaler, scaler_filename)
-    output_filename = f'output/{key.lower()}.csv'
-    combined_df.to_csv(output_filename, index=False)
+
+    # Save to HDF5
+    output_filename = f'output/{key.lower()}.h5'
+    with h5py.File(output_filename, 'w') as h5f:
+        for column in combined_df.columns:
+            h5f.create_dataset(column, data=combined_df[column].values)
+
     logging.info(f"Data scaled and saved to {output_filename}. Scaler saved to {scaler_filename}.")
 
 def read_and_preprocess(directory, key=None, nrows=None):
